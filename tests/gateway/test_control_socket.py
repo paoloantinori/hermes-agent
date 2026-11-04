@@ -315,6 +315,45 @@ def test_home_refusing_sockets_listens_on_private_fallback_both_clients_reach(sh
     assert not (home / "gateway.sock.path").exists()
 
 
+def test_home_eperm_bind_also_falls_back(short_home: Path, monkeypatch):
+    """Rootless virtiofs bind mounts (podman machine on macOS, vz + virtiofs)
+    answer the bind with EPERM rather than EOPNOTSUPP (fleet report,
+    2026-11). The private temp-dir fallback must cover that errno too."""
+    import os
+    import stat
+
+    from hermes_cli.gateway_runtime_discovery import query_identify
+
+    home = short_home.resolve()
+    home.chmod(0o700)
+    attempts = _refusing_start_unix_server(monkeypatch, refuse_under=home, err=errno.EPERM)
+    for name in ("lstat", "stat"):
+        real = getattr(os, name)
+
+        def unstatable(path, *a, _real=real, **k):
+            if os.fspath(path) == str(home / "gateway.sock"):
+                raise OSError(errno.EPERM, "Operation not permitted", str(home / "gateway.sock"))
+            return _real(path, *a, **k)
+
+        monkeypatch.setattr(os, name, unstatable)
+
+    async def scenario():
+        server = GatewayControlServer(home, verb_handlers={"identify": lambda: {"pid": 11}})
+        assert await server.start()
+        try:
+            pointer = home / "gateway.sock.path"
+            target = Path(pointer.read_text(encoding="utf-8"))
+            assert server._bind_path == target and target.name == "control.sock"
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, lambda: query_identify(home, timeout=3))
+        finally:
+            await server.stop()
+
+    assert _run(scenario()) == {"pid": 11}
+    assert attempts[-1].endswith("/control.sock")  # the in-home attempt, if made, was refused
+    assert not (home / "gateway.sock.path").exists()
+
+
 def test_bind_refused_for_other_reasons_still_fails(short_home: Path, monkeypatch):
     # A live sibling (EADDRINUSE) must keep failing loudly — no silent fallback
     # that would let two gateways for one home both look healthy.

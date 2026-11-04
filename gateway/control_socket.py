@@ -39,7 +39,9 @@ _DEFAULT_CLIENT_TIMEOUT = 2.0
 # What a filesystem that cannot host an AF_UNIX node answers: a Docker Desktop (virtiofs) bind mount
 # refuses the socket, and an inode a previous container left there can be neither stat'ed nor
 # removed from inside (#123761). Not EADDRINUSE: a live sibling must keep failing loudly.
-_SOCKET_UNSUPPORTED_ERRNOS = frozenset({errno.EOPNOTSUPP, errno.ENOTSUP})
+# EPERM: rootless virtiofs bind mounts (podman machine on macOS, vz + virtiofs)
+# answer the bind with EPERM instead of EOPNOTSUPP (fleet report, 2026-11).
+_SOCKET_UNSUPPORTED_ERRNOS = frozenset({errno.EOPNOTSUPP, errno.ENOTSUP, errno.EPERM})
 
 
 def _home_hash(home: Path) -> str:
